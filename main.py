@@ -280,24 +280,42 @@ def borrar_conexion(controller_ip=CONTROLLER_IP):
     
 
 def build_route(src_mac, dst_mac, servidor_ip, servicio, handler, controller_ip=CONTROLLER_IP):
-    # Obtener el switch donde está conectado el alumno
-    src_sw_dpid, _ = get_attachment_point(controller_ip, src_mac)
-    if not src_sw_dpid:
-        print("[!] No se detectó al alumno en la red. Asegúrese de hacer ping desde el host.")
+    route = get_route(controller_ip, src_mac, dst_mac)
+    
+    if not route:
+        print("[!] No se pudo calcular la ruta. Asegúrate de hacer ping entre las máquinas primero.")
         return None
 
-    # Construir los diccionarios de flujos (Reglas L2, L3, L4)
-    flows = [
-        {"switch": src_sw_dpid, "name": f"{handler}_arp", "cookie": "0", "priority": "32768", 
-         "eth_type": "0x0806", "active": "true", "actions": "output=normal"},
-        {"switch": src_sw_dpid, "name": f"{handler}_req", "cookie": "0", "priority": "32768",
-         "eth_type": "0x0800", "ipv4_dst": servidor_ip, "ip_proto": "6" if servicio.protocol == "TCP" else "17",
-         "tcp_dst": str(servicio.port), "active": "true", "actions": "output=normal"},
-        {"switch": src_sw_dpid, "name": f"{handler}_res", "cookie": "0", "priority": "32768",
-         "eth_type": "0x0800", "ipv4_src": servidor_ip, "ip_proto": "6" if servicio.protocol == "TCP" else "17",
-         "tcp_src": str(servicio.port), "active": "true", "actions": "output=normal"}
-    ]
-    
+    flows = []
+    switches_procesados = set()
+
+    # Iterar sobre todos los switches de la ruta obtenida
+    for node in route:
+        # Extraer el ID del switch 
+        sw_dpid = node.get("switchDPID", node.get("switch", node.get("node")))
+        
+        if not sw_dpid or sw_dpid in switches_procesados:
+            continue
+        switches_procesados.add(sw_dpid)
+
+        # Nombre único por switch para evitar sobreescritura
+        sw_id = sw_dpid[-2:] 
+
+        # Flujos
+        flows.extend([
+            {"switch": sw_dpid, "name": f"{handler}_{sw_id}_arp", "cookie": "0", "priority": "32768", 
+             "eth_type": "0x0806", "active": "true", "actions": "output=normal"},
+             
+            {"switch": sw_dpid, "name": f"{handler}_{sw_id}_req", "cookie": "0", "priority": "32768",
+             "eth_type": "0x0800", "ipv4_dst": servidor_ip, "ip_proto": "6" if servicio.protocol == "TCP" else "17",
+             "tcp_dst": str(servicio.port), "active": "true", "actions": "output=normal"},
+             
+            {"switch": sw_dpid, "name": f"{handler}_{sw_id}_res", "cookie": "0", "priority": "32768",
+             "eth_type": "0x0800", "ipv4_src": servidor_ip, "ip_proto": "6" if servicio.protocol == "TCP" else "17",
+             "tcp_src": str(servicio.port), "active": "true", "actions": "output=normal"}
+        ])
+        
+    # Insertar asíncronamente
     asyncio.run(push_flows_async(controller_ip, flows))
     return flows
 
