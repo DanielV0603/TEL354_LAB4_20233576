@@ -280,31 +280,33 @@ def borrar_conexion(controller_ip=CONTROLLER_IP):
     
 
 def build_route(src_mac, dst_mac, servidor_ip, servicio, handler, controller_ip=CONTROLLER_IP):
-    route = get_route(controller_ip, src_mac, dst_mac)
+    route_response = get_route(controller_ip, src_mac, dst_mac)
     
-    if not route:
-        print("[!] No se pudo calcular la ruta. Asegúrate de hacer ping entre las máquinas primero.")
+    # Manejo seguro del formato de respuesta de Floodlight
+    route_list = []
+    if isinstance(route_response, dict) and "route" in route_response:
+        route_list = route_response["route"]
+    elif isinstance(route_response, list):
+        route_list = route_response
+        
+    if not route_list:
+        print("[!] No se pudo calcular la ruta. Asegúrate de hacer ping primero.")
         return None
 
     flows = []
     switches_procesados = set()
 
-    # Iterar sobre todos los switches de la ruta obtenida
-    for node in route:
-        # Extraer el ID del switch 
-        sw_dpid = node.get("switchDPID", node.get("switch", node.get("node")))
-        
+    for node in route_list:
+        sw_dpid = node.get("switchDPID", node.get("switch", node.get("node", "")))
         if not sw_dpid or sw_dpid in switches_procesados:
             continue
         switches_procesados.add(sw_dpid)
 
-        # Nombre único por switch para evitar sobreescritura
         sw_id = sw_dpid[-2:] 
 
-        # Flujos
         flows.extend([
             {"switch": sw_dpid, "name": f"{handler}_{sw_id}_arp", "cookie": "0", "priority": "32768", 
-             "eth_type": "0x0806", "active": "true", "actions": "output=normal"},
+             "eth_type": "0x0806", "active": "true", "actions": "output=flood"},
              
             {"switch": sw_dpid, "name": f"{handler}_{sw_id}_req", "cookie": "0", "priority": "32768",
              "eth_type": "0x0800", "ipv4_dst": servidor_ip, "ip_proto": "6" if servicio.protocol == "TCP" else "17",
@@ -315,7 +317,6 @@ def build_route(src_mac, dst_mac, servidor_ip, servicio, handler, controller_ip=
              "tcp_src": str(servicio.port), "active": "true", "actions": "output=normal"}
         ])
         
-    # Insertar asíncronamente
     asyncio.run(push_flows_async(controller_ip, flows))
     return flows
 
