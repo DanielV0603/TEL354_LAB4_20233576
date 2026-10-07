@@ -2,6 +2,10 @@ from select import select
 import yaml
 import json
 import requests
+import asyncio
+import aiohttp
+
+CONTROLLER_IP = "127.0.0.1"
 
 class Student:
     # ADD YOUR CODE HERE
@@ -229,11 +233,108 @@ def menu():
     print("7) Conexiones")
     print("8) Salir")
     return input(">>> ")
+
+# Diccionario global para guardar las conexiones activas
+conexiones_activas = {}
+
+# Función asíncrona para insertar flujos concurrentemente usando aiohttp
+async def push_flows_async(controller_ip, flows):
+    url = f"http://{controller_ip}:8080/wm/staticflowpusher/json"
+    async with aiohttp.ClientSession() as session:
+        tareas = [session.post(url, json=f) for f in flows]
+        resultados = await asyncio.gather(*tareas)
+        for r in resultados:
+            if r.status not in [200, 201]:
+                print(f"[!] Error insertando flujo. Código HTTP: {r.status}")
+
+def listar_conexiones():
+    print("\n--- Conexiones Activas ---")
+    if not conexiones_activas:
+        print("No hay conexiones activas.")
+    for handler in conexiones_activas:
+        print(f" - {handler}")
+
+async def delete_flows_async(controller_ip, flows):
+    url = f"http://{controller_ip}:8080/wm/staticflowpusher/json"
+    async with aiohttp.ClientSession() as session:
+        tareas = [session.delete(url, json={"name": f["name"]}) for f in flows]
+        await asyncio.gather(*tareas)
+
+def borrar_conexion(controller_ip=CONTROLLER_IP):
+    listar_conexiones()
+    if conexiones_activas:
+        h = input("\nIngrese el nombre exacto del Handler a borrar: ")
+        if h in conexiones_activas:
+            # Llama a la función asíncrona para borrar los flujos en los switches
+            asyncio.run(delete_flows_async(controller_ip, conexiones_activas[h]))
+            # Lo elimina del diccionario local
+            del conexiones_activas[h]
+            print(f"[*] Flujos del handler '{h}' eliminados de la red.")
+        else:
+            print("[!] Handler no encontrado.")
     
 
-def build_route():
-    # ADD YOUR CODE HERE
-    print()
+def build_route(src_mac, dst_mac, servidor_ip, servicio, handler, controller_ip=CONTROLLER_IP):
+    # Obtener el switch donde está conectado el alumno
+    src_sw_dpid, _ = get_attachment_point(controller_ip, src_mac)
+    if not src_sw_dpid:
+        print("[!] No se detectó al alumno en la red. Asegúrese de hacer ping desde el host.")
+        return None
+
+    # Construir los diccionarios de flujos (Reglas L2, L3, L4)
+    flows = [
+        {"switch": src_sw_dpid, "name": f"{handler}_arp", "cookie": "0", "priority": "32768", 
+         "eth_type": "0x0806", "active": "true", "actions": "output=normal"},
+        {"switch": src_sw_dpid, "name": f"{handler}_req", "cookie": "0", "priority": "32768",
+         "eth_type": "0x0800", "ipv4_dst": servidor_ip, "ip_proto": "6" if servicio.protocol == "TCP" else "17",
+         "tcp_dst": str(servicio.port), "active": "true", "actions": "output=normal"},
+        {"switch": src_sw_dpid, "name": f"{handler}_res", "cookie": "0", "priority": "32768",
+         "eth_type": "0x0800", "ipv4_src": servidor_ip, "ip_proto": "6" if servicio.protocol == "TCP" else "17",
+         "tcp_src": str(servicio.port), "active": "true", "actions": "output=normal"}
+    ]
+    
+    asyncio.run(push_flows_async(controller_ip, flows))
+    return flows
+
+def crear_conexion(students, servers, courses, controller_ip=CONTROLLER_IP):
+    print("\n--- Crear Conexión ---")
+    listar_alumnos(students)
+    idx_al = int(input("Seleccione número del alumno: ")) - 1
+    alumno = students[idx_al]
+    
+    listar_servidores(servers)
+    idx_srv = int(input("Seleccione número del servidor: ")) - 1
+    servidor = servers[idx_srv]
+    
+    print(f"\nServicios en {servidor.name}:")
+    for i, srv in enumerate(servidor.services):
+        print(f" {i+1}. {srv.name} ({srv.protocol}/{srv.port})")
+    idx_serv = int(input("Seleccione número del servicio: ")) - 1
+    servicio = servidor.services[idx_serv]
+    
+    # Validar Políticas
+    autorizado = False
+    for c in courses:
+        if c.state == "ACTIVE" and alumno.name in c.students:
+            for s in c.servers:
+                if s['name'] == servidor.name and servicio.name in s.get('allowed_services', []):
+                    autorizado = True
+                    break
+                    
+    if not autorizado:
+        print(f"[!] DENEGADO: El alumno no está autorizado o el curso está inactivo.")
+        return
+        
+    print("[*] Autorizado. Calculando ruta...")
+    dst_mac = input("Ingrese la MAC del servidor destino (Ej. la MAC de H3): ")
+    handler = f"{alumno.name.replace(' ','_')}_TO_{servidor.name.replace(' ','_')}_{servicio.name}"
+    
+    # Llamamos a build_route respetando la instrucción de la guía
+    flows_generados = build_route(alumno.mac, dst_mac, servidor.ip, servicio, handler, controller_ip)
+    
+    if flows_generados:
+        conexiones_activas[handler] = flows_generados
+        print(f"[*] Conexión instalada. Handler: {handler}")
 
 
 def main():
@@ -303,7 +404,13 @@ def main():
             print("2) Listar")
             print("3) Borrar")
             print("[!] (Funcionalidades de conexión pendientes de implementar)")
-            
+            sub_op = input(">>> ")
+            if sub_op == '1':
+                crear_conexion(students, servers, courses)
+            elif sub_op == '2':
+                listar_conexiones()
+            elif sub_op == '3':
+                borrar_conexion()
         elif opcion == '8':
             print("Saliendo del Network Policy Manager...")
             break
