@@ -100,13 +100,18 @@ def get_attachment_point(controller_ip, mac):
         url,
         params={'mac': mac}
     )
-    result, = response.json()
+    
+    devices = response.json()
+    if not devices:
+        return None, None
+        
+    result = devices[0]
     attachment_points = result.get("attachmentPoint", [])
 
     if not attachment_points:
         return None, None
 
-    attachment_point, = attachment_points
+    attachment_point = attachment_points[0]
     return attachment_point["switchDPID"], attachment_point["port"]
 
 
