@@ -50,6 +50,11 @@ class Course:
         print("Alumnos inscritos:")
         for a in self.students:
             print(f"  - {a}")
+            print(" Servidores permitidos:")
+        for s in self.servers:
+            servicios_permitidos = ", ".join(s.get('allowed_services', []))
+            print(f"  - {s['name']} (Servicios: {servicios_permitidos})")
+        print("------------------------------------------------------\n")
 
     def agregar_alumno(self, student_name):
         if student_name not in self.students:
