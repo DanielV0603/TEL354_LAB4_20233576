@@ -2,7 +2,6 @@ from select import select
 import yaml
 import json
 import requests
-import sys
 
 class Student:
     # ADD YOUR CODE HERE
@@ -73,7 +72,15 @@ def load_data(filename):
         data = yaml.safe_load(file)
     students = [ Student(x["name"], x["mac"]) for x in data["students"] ]
     servers = [ Server(y["name"], y["ip"], y["services"]) for y in data["servers"] ]
-    courses = [ Course(z["name"], z["state"], z["students"], z["servers"]) for z in data["courses"] ]
+    courses = []
+    for z in data.get("courses", []):
+        courses.append(Course(
+            name=z["name"], 
+            code=z["code"], 
+            state=z["state"], 
+            students=z.get("students", []), 
+            servers=z.get("servers", [])
+        ))
     return students, servers, courses
 
 
